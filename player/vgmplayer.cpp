@@ -790,6 +790,26 @@ UINT8 VGMPlayer::GetDeviceMuting(UINT32 id, PLR_MUTE_OPTS& muteOpts) const
 	return 0x00;
 }
 
+UINT8 VGMPlayer::SetDeviceVolume(UINT32 id, UINT16 volume)
+{
+	size_t optID = DeviceID2OptionID(id);
+	if (optID == (size_t)-1)
+		return 0x80;	// bad device ID
+
+	size_t devID = _optDevMap[optID];
+	if (devID < _devices.size())
+	{
+		CHIP_DEVICE& chipDev = _devices[devID];
+		VGM_BASEDEV* clDev;
+		for (clDev = &chipDev.base; clDev != NULL; clDev = clDev->linkDev)
+		{
+			clDev->resmpl.volumeL = volume;
+			clDev->resmpl.volumeR = volume;
+		}
+	}
+	return 0x00;
+}
+
 UINT8 VGMPlayer::SetPlayerOptions(const VGM_PLAY_OPTIONS& playOpts)
 {
 	_playOpts = playOpts;

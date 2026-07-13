@@ -157,6 +157,7 @@ public:
 	UINT8 GetDeviceOptions(UINT32 id, PLR_DEV_OPTS& devOpts) const;
 	UINT8 SetDeviceMuting(UINT32 id, const PLR_MUTE_OPTS& muteOpts);
 	UINT8 GetDeviceMuting(UINT32 id, PLR_MUTE_OPTS& muteOpts) const;
+	UINT8 SetDeviceVolume(UINT32 id, UINT16 volume);
 	// player-specific options
 	UINT8 SetPlayerOptions(const VGM_PLAY_OPTIONS& playOpts);
 	UINT8 GetPlayerOptions(VGM_PLAY_OPTIONS& playOpts) const;
