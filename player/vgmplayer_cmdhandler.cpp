@@ -841,34 +841,39 @@ void VGMPlayer::Cmd_YM2612PCM_Delay(void)
 	CHIP_DEVICE* cDev = GetDevicePtr(0x02, 0);
 	UINT32 delay = fData[0x00] & 0x0F;
 	if (_playOpts.preserveYM2612DacRate && _playOpts.playbackHz != 0 &&
-		_fileHdr.recordHz != 0 && _playOpts.playbackHz < _fileHdr.recordHz)
+		_fileHdr.recordHz != 0 && _playOpts.playbackHz < _fileHdr.recordHz &&
+		! (_playState & PLAYSTATE_SEEK))
 	{
-		// playbackHz normally stretches every VGM tick. 80..8F waits are also
-		// the YM2612 DAC byte clock, however, and real hardware does not lower
-		// that clock when a 60 Hz driver is run at 50 Hz. Compress the waits by
-		// playbackHz/recordHz with accumulated rounding, then put the saved time
-		// at the end of the contiguous PCM burst so later events stay in sync.
-		_ym2612pcmBurstTicks += delay;
-		UINT64 scaledTotal = (_ym2612pcmBurstTicks * _playOpts.playbackHz +
-			_fileHdr.recordHz / 2) / _fileHdr.recordHz;
-		_fileTick += (UINT32)(scaledTotal - _ym2612pcmScaledTicks);
-		_ym2612pcmScaledTicks = scaledTotal;
-
-		UINT32 nextPos = _filePos + 1;
-		bool nextIsPCM = nextPos < _fileHdr.dataEnd &&
-			(_fileData[nextPos] & 0xF0) == 0x80;
-		if (! nextIsPCM)
+		// Parse the contiguous burst now and schedule its bytes directly on the
+		// output-sample timeline. Keeping the ordinary VGM tick total unchanged
+		// preserves 50 Hz sequencer timing, while bypassing its 6/5 scaler avoids
+		// both pitch-stretching and duplicate writes caused by integer tick
+		// compression.
+		UINT32 cmdPos = _filePos;
+		UINT64 burstTicks = 0;
+		UINT32 burstStartSample = Tick2Sample(_fileTick);
+		_ym2612pcmEvents.clear();
+		_ym2612pcmEventPos = 0;
+		while (cmdPos < _fileHdr.dataEnd && (_fileData[cmdPos] & 0xF0) == 0x80)
 		{
-			_fileTick += (UINT32)(_ym2612pcmBurstTicks - _ym2612pcmScaledTicks);
-			_ym2612pcmBurstTicks = 0;
-			_ym2612pcmScaledTicks = 0;
+			if (_ym2612pcm_bnkPos < _pcmBank[0].data.size())
+			{
+				YM2612_PCM_EVENT evt;
+				evt.sample = burstStartSample + (UINT32)((burstTicks * _outSmplRate + 22050) / 44100);
+				evt.data = _pcmBank[0].data[_ym2612pcm_bnkPos];
+				_ym2612pcmEvents.push_back(evt);
+				_ym2612pcm_bnkPos ++;
+			}
+			burstTicks += _fileData[cmdPos] & 0x0F;
+			cmdPos ++;
 		}
+		_fileTick += (UINT32)burstTicks;
+		_filePos = cmdPos - 1;
+		return;
 	}
 	else
 	{
 		_fileTick += delay;
-		_ym2612pcmBurstTicks = 0;
-		_ym2612pcmScaledTicks = 0;
 	}
 	
 	if (cDev == NULL || cDev->write8 == NULL)

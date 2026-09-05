@@ -117,6 +117,11 @@ protected:
 		std::vector<UINT32> bankOfs;
 		std::vector<UINT32> bankSize;
 	};
+	struct YM2612_PCM_EVENT
+	{
+		UINT32 sample;
+		UINT8 data;
+	};
 	
 	typedef void (VGMPlayer::*COMMAND_FUNC)(void);	// VGM command member function callback
 	struct DEVLINK_CB_DATA
@@ -224,6 +229,7 @@ protected:
 	UINT8 SeekToTick(UINT32 tick);
 	UINT8 SeekToFilePos(UINT32 pos);
 	void ParseFile(UINT32 ticks);
+	void ApplyYM2612PCMEvents(UINT32 throughSample);
 
 	void ParseFileForFMClocks();
 	
@@ -369,8 +375,8 @@ protected:
 	
 	UINT8 _p2612Fix;	// enable hack/fix for Project2612 VGMs
 	UINT32 _ym2612pcm_bnkPos;
-	UINT64 _ym2612pcmBurstTicks;
-	UINT64 _ym2612pcmScaledTicks;
+	std::vector<YM2612_PCM_EVENT> _ym2612pcmEvents;
+	size_t _ym2612pcmEventPos;
 	UINT8 _rf5cBank[2][2];	// [0 RF5C68 / 1 RF5C164][chipID]
 	QSOUND_WORK _qsWork[2];
 

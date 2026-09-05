@@ -148,8 +148,7 @@ VGMPlayer::VGMPlayer() :
 	_curLoop(0),
 	_playState(0x00),
 	_psTrigger(0x00),
-	_ym2612pcmBurstTicks(0),
-	_ym2612pcmScaledTicks(0)
+	_ym2612pcmEventPos(0)
 {
 	UINT8 retVal;
 	UINT16 optChip;
@@ -815,12 +814,6 @@ UINT8 VGMPlayer::SetDeviceVolume(UINT32 id, UINT16 volume)
 
 UINT8 VGMPlayer::SetPlayerOptions(const VGM_PLAY_OPTIONS& playOpts)
 {
-	// If the option changes between Render calls in the middle of an 80..8F
-	// burst, restore its deferred ticks before changing timing modes.
-	if (_ym2612pcmBurstTicks >= _ym2612pcmScaledTicks)
-		_fileTick += (UINT32)(_ym2612pcmBurstTicks - _ym2612pcmScaledTicks);
-	_ym2612pcmBurstTicks = 0;
-	_ym2612pcmScaledTicks = 0;
 	_playOpts = playOpts;
 	RefreshTSRates();	// refresh, in case _playOpts.playbackHz changed
 	return 0x00;
@@ -872,8 +865,12 @@ void VGMPlayer::RefreshTSRates(void)
 	if (_tsMult != _lastTsMult ||
 	    _tsDiv != _lastTsDiv)
 	{
+		UINT32 oldPlaySmpl = _playSmpl;
 		if (_lastTsMult && _lastTsDiv)	// the order * / * / is required to avoid overflow
 			_playSmpl = (UINT32)(_playSmpl * _lastTsDiv / _lastTsMult * _tsMult / _tsDiv);
+		INT64 sampleShift = (INT64)_playSmpl - oldPlaySmpl;
+		for (size_t evt = _ym2612pcmEventPos; evt < _ym2612pcmEvents.size(); evt ++)
+			_ym2612pcmEvents[evt].sample = (UINT32)((INT64)_ym2612pcmEvents[evt].sample + sampleShift);
 		_lastTsMult = _tsMult;
 		_lastTsDiv = _tsDiv;
 	}
@@ -1044,6 +1041,8 @@ UINT8 VGMPlayer::Reset(void)
 	_psTrigger = 0x00;
 	_curLoop = 0;
 	_lastLoopTick = 0;
+	_ym2612pcmEvents.clear();
+	_ym2612pcmEventPos = 0;
 	
 	RefreshTSRates();
 	
@@ -1069,8 +1068,6 @@ UINT8 VGMPlayer::Reset(void)
 	memset(&_pcmComprTbl, 0x00, sizeof(PCM_COMPR_TBL));
 	
 	_ym2612pcm_bnkPos = 0x00;
-	_ym2612pcmBurstTicks = 0;
-	_ym2612pcmScaledTicks = 0;
 	memset(_rf5cBank, 0x00, sizeof(_rf5cBank));
 	for (chipID = 0; chipID < 2; chipID ++)
 	{
@@ -1874,6 +1871,7 @@ UINT8 VGMPlayer::Seek(UINT8 unit, UINT32 pos)
 UINT8 VGMPlayer::SeekToTick(UINT32 tick)
 {
 	_playState |= PLAYSTATE_SEEK;
+	ApplyYM2612PCMEvents(Tick2Sample(tick));
 	if (tick > _playTick)
 		ParseFile(tick - _playTick);
 	_playSmpl = Tick2Sample(_playTick);
@@ -1921,6 +1919,7 @@ UINT32 VGMPlayer::Render(UINT32 smplCnt, WAVE_32BS* data)
 	{
 		smplFileTick = Sample2Tick(_playSmpl);
 		ParseFile(smplFileTick - _playTick);
+		ApplyYM2612PCMEvents(_playSmpl);
 		
 		// render as many samples at once as possible (for better performance)
 		maxSmpl = Tick2Sample(_fileTick);
@@ -1928,6 +1927,12 @@ UINT32 VGMPlayer::Render(UINT32 smplCnt, WAVE_32BS* data)
 		// When DAC streams are active, limit step size to 1, so that DAC streams and sound chip emulation are in sync.
 		if (smplStep < 1 || ! _dacStreams.empty())
 			smplStep = 1;	// must render at least 1 sample in order to advance
+		if (_ym2612pcmEventPos < _ym2612pcmEvents.size())
+		{
+			UINT32 pcmSmpl = _ym2612pcmEvents[_ym2612pcmEventPos].sample;
+			if (pcmSmpl > _playSmpl && smplStep > (INT32)(pcmSmpl - _playSmpl))
+				smplStep = pcmSmpl - _playSmpl;
+		}
 		if ((UINT32)smplStep > smplCnt - curSmpl)
 			smplStep = smplCnt - curSmpl;
 		
@@ -1959,6 +1964,30 @@ UINT32 VGMPlayer::Render(UINT32 smplCnt, WAVE_32BS* data)
 	} while(curSmpl < smplCnt);
 	
 	return curSmpl;
+}
+
+void VGMPlayer::ApplyYM2612PCMEvents(UINT32 throughSample)
+{
+	if (_ym2612pcmEventPos >= _ym2612pcmEvents.size())
+		return;
+	CHIP_DEVICE* cDev = GetDevicePtr(0x02, 0);
+	while (_ym2612pcmEventPos < _ym2612pcmEvents.size() &&
+		_ym2612pcmEvents[_ym2612pcmEventPos].sample <= throughSample)
+	{
+		if (cDev != NULL && cDev->write8 != NULL)
+		{
+			cDev->write8(cDev->base.defInf.dataPtr, 0x00, 0x2A);
+			cDev->write8(cDev->base.defInf.dataPtr, 0x01,
+				_ym2612pcmEvents[_ym2612pcmEventPos].data);
+		}
+		_ym2612pcmEventPos ++;
+	}
+	if (_ym2612pcmEventPos >= _ym2612pcmEvents.size())
+	{
+		_ym2612pcmEvents.clear();
+		_ym2612pcmEventPos = 0;
+	}
+	return;
 }
 
 void VGMPlayer::ParseFile(UINT32 ticks)
