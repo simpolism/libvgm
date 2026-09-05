@@ -377,6 +377,7 @@ protected:
 	UINT32 _ym2612pcm_bnkPos;
 	std::vector<YM2612_PCM_EVENT> _ym2612pcmEvents;
 	size_t _ym2612pcmEventPos;
+	UINT32 _ym2612pcmSuppressThrough;
 	UINT8 _rf5cBank[2][2];	// [0 RF5C68 / 1 RF5C164][chipID]
 	QSOUND_WORK _qsWork[2];
 

@@ -840,35 +840,86 @@ void VGMPlayer::Cmd_YM2612PCM_Delay(void)
 {
 	CHIP_DEVICE* cDev = GetDevicePtr(0x02, 0);
 	UINT32 delay = fData[0x00] & 0x0F;
-	if (_playOpts.preserveYM2612DacRate && _playOpts.playbackHz != 0 &&
+	bool nativeDacRate = _playOpts.preserveYM2612DacRate && _playOpts.playbackHz != 0 &&
 		_fileHdr.recordHz != 0 && _playOpts.playbackHz < _fileHdr.recordHz &&
-		! (_playState & PLAYSTATE_SEEK))
+		! (_playState & PLAYSTATE_SEEK);
+	if (nativeDacRate && _ym2612pcmSuppressThrough != (UINT32)-1 &&
+		_filePos <= _ym2612pcmSuppressThrough)
 	{
-		// Parse the contiguous burst now and schedule its bytes directly on the
-		// output-sample timeline. Keeping the ordinary VGM tick total unchanged
-		// preserves 50 Hz sequencer timing, while bypassing its 6/5 scaler avoids
-		// both pitch-stretching and duplicate writes caused by integer tick
-		// compression.
-		UINT32 cmdPos = _filePos;
-		UINT64 burstTicks = 0;
-		UINT32 burstStartSample = Tick2Sample(_fileTick);
+		_fileTick += delay;
+		if (_ym2612pcm_bnkPos < _pcmBank[0].data.size())
+			_ym2612pcm_bnkPos ++;
+		if (_filePos == _ym2612pcmSuppressThrough)
+			_ym2612pcmSuppressThrough = (UINT32)-1;
+		return;
+	}
+	if (nativeDacRate)
+	{
+		// Build one logical PCM run, looking through interleaved zero-time chip
+		// writes. Those writes remain on the normal (stretched) command timeline;
+		// only the already-captured DAC bytes are emitted in output-sample time.
+		// Short driver interruptions belong to the PCM waveform too. A gap of
+		// half an NTSC frame ends the run and keeps separate hits on the slowed
+		// sequencer timeline.
+		const UINT32 maxPcmGapTicks = 367;
+		UINT32 scanPos = _filePos;
+		UINT32 scanBankPos = _ym2612pcm_bnkPos;
+		UINT32 lastPcmPos = _filePos;
+		UINT64 scanTick = 0;
+		UINT64 lastPcmTick = 0;
+		UINT32 runStartSample = Tick2Sample(_fileTick);
 		_ym2612pcmEvents.clear();
 		_ym2612pcmEventPos = 0;
-		while (cmdPos < _fileHdr.dataEnd && (_fileData[cmdPos] & 0xF0) == 0x80)
+		while (scanPos < _fileHdr.dataEnd)
 		{
-			if (_ym2612pcm_bnkPos < _pcmBank[0].data.size())
+			UINT8 cmd = _fileData[scanPos];
+			if ((cmd & 0xF0) == 0x80)
 			{
-				YM2612_PCM_EVENT evt;
-				evt.sample = burstStartSample + (UINT32)((burstTicks * _outSmplRate + 22050) / 44100);
-				evt.data = _pcmBank[0].data[_ym2612pcm_bnkPos];
-				_ym2612pcmEvents.push_back(evt);
-				_ym2612pcm_bnkPos ++;
+				if (scanTick - lastPcmTick > maxPcmGapTicks)
+					break;
+				if (scanBankPos < _pcmBank[0].data.size())
+				{
+					YM2612_PCM_EVENT evt;
+					evt.sample = runStartSample +
+						(UINT32)((scanTick * _outSmplRate + 22050) / 44100);
+					evt.data = _pcmBank[0].data[scanBankPos];
+					_ym2612pcmEvents.push_back(evt);
+					scanBankPos ++;
+				}
+				lastPcmPos = scanPos;
+				lastPcmTick = scanTick;
+				scanTick += cmd & 0x0F;
+				scanPos ++;
+				continue;
 			}
-			burstTicks += _fileData[cmdPos] & 0x0F;
-			cmdPos ++;
+
+			UINT32 waitTicks = 0;
+			if (cmd == 0x61 && scanPos + 2 < _fileHdr.dataEnd)
+				waitTicks = ReadLE16(&_fileData[scanPos + 1]);
+			else if (cmd == 0x62)
+				waitTicks = 735;
+			else if (cmd == 0x63)
+				waitTicks = 882;
+			else if ((cmd & 0xF0) == 0x70)
+				waitTicks = 1 + (cmd & 0x0F);
+			if (waitTicks != 0)
+			{
+				scanTick += waitTicks;
+				if (scanTick - lastPcmTick > maxPcmGapTicks)
+					break;
+			}
+
+			UINT8 cmdLen = _CMD_INFO[cmd].cmdLen;
+			if (cmdLen == 0 || scanPos + cmdLen > _fileHdr.dataEnd || cmd == 0xE0)
+				break;
+			scanPos += cmdLen;
 		}
-		_fileTick += (UINT32)burstTicks;
-		_filePos = cmdPos - 1;
+		_ym2612pcmSuppressThrough = lastPcmPos;
+		_fileTick += delay;
+		if (_ym2612pcm_bnkPos < _pcmBank[0].data.size())
+			_ym2612pcm_bnkPos ++;
+		if (_filePos == _ym2612pcmSuppressThrough)
+			_ym2612pcmSuppressThrough = (UINT32)-1;
 		return;
 	}
 	else

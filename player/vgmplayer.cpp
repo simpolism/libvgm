@@ -148,7 +148,8 @@ VGMPlayer::VGMPlayer() :
 	_curLoop(0),
 	_playState(0x00),
 	_psTrigger(0x00),
-	_ym2612pcmEventPos(0)
+	_ym2612pcmEventPos(0),
+	_ym2612pcmSuppressThrough((UINT32)-1)
 {
 	UINT8 retVal;
 	UINT16 optChip;
@@ -814,6 +815,9 @@ UINT8 VGMPlayer::SetDeviceVolume(UINT32 id, UINT16 volume)
 
 UINT8 VGMPlayer::SetPlayerOptions(const VGM_PLAY_OPTIONS& playOpts)
 {
+	_ym2612pcmEvents.clear();
+	_ym2612pcmEventPos = 0;
+	_ym2612pcmSuppressThrough = (UINT32)-1;
 	_playOpts = playOpts;
 	RefreshTSRates();	// refresh, in case _playOpts.playbackHz changed
 	return 0x00;
@@ -1043,6 +1047,7 @@ UINT8 VGMPlayer::Reset(void)
 	_lastLoopTick = 0;
 	_ym2612pcmEvents.clear();
 	_ym2612pcmEventPos = 0;
+	_ym2612pcmSuppressThrough = (UINT32)-1;
 	
 	RefreshTSRates();
 	
@@ -1847,6 +1852,9 @@ void VGMPlayer::LoadOPL4ROM(CHIP_DEVICE* chipDev)
 
 UINT8 VGMPlayer::Seek(UINT8 unit, UINT32 pos)
 {
+	_ym2612pcmEvents.clear();
+	_ym2612pcmEventPos = 0;
+	_ym2612pcmSuppressThrough = (UINT32)-1;
 	switch(unit)
 	{
 	case PLAYPOS_FILEOFS:
@@ -1871,7 +1879,6 @@ UINT8 VGMPlayer::Seek(UINT8 unit, UINT32 pos)
 UINT8 VGMPlayer::SeekToTick(UINT32 tick)
 {
 	_playState |= PLAYSTATE_SEEK;
-	ApplyYM2612PCMEvents(Tick2Sample(tick));
 	if (tick > _playTick)
 		ParseFile(tick - _playTick);
 	_playSmpl = Tick2Sample(_playTick);
