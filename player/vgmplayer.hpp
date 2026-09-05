@@ -46,6 +46,7 @@ struct VGM_PLAY_OPTIONS
 	UINT32 playbackHz;	// set to 60 (NTSC) or 50 (PAL) for region-specific song speed adjustment
 						// Note: requires VGM_HEADER.recordHz to be non-zero to work.
 	UINT8 hardStopOld;	// enforce silence at end of old VGMs (<1.50), fixes Key Off events being trimmed off
+	UINT8 preserveYM2612DacRate;	// keep 80..8F PCM byte timing at the recorded hardware rate when slowing playback
 };
 
 
@@ -368,6 +369,8 @@ protected:
 	
 	UINT8 _p2612Fix;	// enable hack/fix for Project2612 VGMs
 	UINT32 _ym2612pcm_bnkPos;
+	UINT64 _ym2612pcmBurstTicks;
+	UINT64 _ym2612pcmScaledTicks;
 	UINT8 _rf5cBank[2][2];	// [0 RF5C68 / 1 RF5C164][chipID]
 	QSOUND_WORK _qsWork[2];
 

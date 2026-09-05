@@ -147,7 +147,9 @@ VGMPlayer::VGMPlayer() :
 	_playSmpl(0),
 	_curLoop(0),
 	_playState(0x00),
-	_psTrigger(0x00)
+	_psTrigger(0x00),
+	_ym2612pcmBurstTicks(0),
+	_ym2612pcmScaledTicks(0)
 {
 	UINT8 retVal;
 	UINT16 optChip;
@@ -157,6 +159,7 @@ VGMPlayer::VGMPlayer() :
 	
 	_playOpts.playbackHz = 0;
 	_playOpts.hardStopOld = 0;
+	_playOpts.preserveYM2612DacRate = 0;
 	_playOpts.genOpts.pbSpeed = 0x10000;
 
 	_lastTsMult = 0;
@@ -812,6 +815,12 @@ UINT8 VGMPlayer::SetDeviceVolume(UINT32 id, UINT16 volume)
 
 UINT8 VGMPlayer::SetPlayerOptions(const VGM_PLAY_OPTIONS& playOpts)
 {
+	// If the option changes between Render calls in the middle of an 80..8F
+	// burst, restore its deferred ticks before changing timing modes.
+	if (_ym2612pcmBurstTicks >= _ym2612pcmScaledTicks)
+		_fileTick += (UINT32)(_ym2612pcmBurstTicks - _ym2612pcmScaledTicks);
+	_ym2612pcmBurstTicks = 0;
+	_ym2612pcmScaledTicks = 0;
 	_playOpts = playOpts;
 	RefreshTSRates();	// refresh, in case _playOpts.playbackHz changed
 	return 0x00;
@@ -1060,6 +1069,8 @@ UINT8 VGMPlayer::Reset(void)
 	memset(&_pcmComprTbl, 0x00, sizeof(PCM_COMPR_TBL));
 	
 	_ym2612pcm_bnkPos = 0x00;
+	_ym2612pcmBurstTicks = 0;
+	_ym2612pcmScaledTicks = 0;
 	memset(_rf5cBank, 0x00, sizeof(_rf5cBank));
 	for (chipID = 0; chipID < 2; chipID ++)
 	{

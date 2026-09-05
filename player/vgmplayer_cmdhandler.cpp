@@ -839,7 +839,37 @@ void VGMPlayer::Cmd_PcmRamWrite(void)
 void VGMPlayer::Cmd_YM2612PCM_Delay(void)
 {
 	CHIP_DEVICE* cDev = GetDevicePtr(0x02, 0);
-	_fileTick += (fData[0x00] & 0x0F);
+	UINT32 delay = fData[0x00] & 0x0F;
+	if (_playOpts.preserveYM2612DacRate && _playOpts.playbackHz != 0 &&
+		_fileHdr.recordHz != 0 && _playOpts.playbackHz < _fileHdr.recordHz)
+	{
+		// playbackHz normally stretches every VGM tick. 80..8F waits are also
+		// the YM2612 DAC byte clock, however, and real hardware does not lower
+		// that clock when a 60 Hz driver is run at 50 Hz. Compress the waits by
+		// playbackHz/recordHz with accumulated rounding, then put the saved time
+		// at the end of the contiguous PCM burst so later events stay in sync.
+		_ym2612pcmBurstTicks += delay;
+		UINT64 scaledTotal = (_ym2612pcmBurstTicks * _playOpts.playbackHz +
+			_fileHdr.recordHz / 2) / _fileHdr.recordHz;
+		_fileTick += (UINT32)(scaledTotal - _ym2612pcmScaledTicks);
+		_ym2612pcmScaledTicks = scaledTotal;
+
+		UINT32 nextPos = _filePos + 1;
+		bool nextIsPCM = nextPos < _fileHdr.dataEnd &&
+			(_fileData[nextPos] & 0xF0) == 0x80;
+		if (! nextIsPCM)
+		{
+			_fileTick += (UINT32)(_ym2612pcmBurstTicks - _ym2612pcmScaledTicks);
+			_ym2612pcmBurstTicks = 0;
+			_ym2612pcmScaledTicks = 0;
+		}
+	}
+	else
+	{
+		_fileTick += delay;
+		_ym2612pcmBurstTicks = 0;
+		_ym2612pcmScaledTicks = 0;
+	}
 	
 	if (cDev == NULL || cDev->write8 == NULL)
 		return;
